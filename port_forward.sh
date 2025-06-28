@@ -2,7 +2,7 @@
 
 #================================================================
 # 通用端口转发管理脚本 (Universal Port Forwarding Manager)
-# 版本: 2.0
+# 版本: 2.1
 # 作者: Assistant
 # 描述: 基于iptables的智能端口转发管理工具
 # 支持: Ubuntu/Debian/CentOS/RHEL等Linux发行版
@@ -13,12 +13,12 @@
 #================================================================
 
 # 目标服务器配置（需要被中转的服务器）
-TARGET_SERVER_IP="目标服务器IP"          # 例如: "111.xxx.xxx.xxx"
-TARGET_SERVER_NAME="目标服务器"           # 例如: "德国服务器"
+TARGET_SERVER_IP="111.xxx.xxx.xxx"          # 例如: "111.xxx.xxx.xxx"
+TARGET_SERVER_NAME="德国服务器"           # 例如: "德国服务器"
 
 # 中转服务器配置（当前运行脚本的服务器）
-RELAY_SERVER_IP="中转服务器IP"           # 例如: "222.xxx.xxx.xxx" 
-RELAY_SERVER_NAME="中转服务器"           # 例如: "腾讯云"
+RELAY_SERVER_IP="222.xxx.xxx.xxx"         # 例如: "222.xxx.xxx.xxx" 
+RELAY_SERVER_NAME="腾讯云"               # 例如: "腾讯云"
 
 # 规则保存文件路径
 RULES_FILE="/etc/iptables/rules.v4"
@@ -612,327 +612,43 @@ remove_port_forward() {
     fi
 }
 
-# 列出所有转发规则
+# 列出转发规则（增强版）
 list_port_forwards() {
     local search_port=$1
     
     if [ -n "$search_port" ]; then
-        # 显示特定端口的详细信息
         echo -e "${BLUE}=== 端口 $search_port 详细信息 ===${NC}"
         
+        # 查找转发规则
         local rule_info=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep "dpt:$search_port.*to:$TARGET_SERVER_IP")
         
         if [ -n "$rule_info" ]; then
-            log_success "转发规则存在"
+            echo -e "${GREEN}转发规则:${NC}"
             echo "$rule_info"
             
             local target_port=$(echo "$rule_info" | grep -o "to:$TARGET_SERVER_IP:[0-9]*" | cut -d':' -f3)
-            echo ""
-            echo -e "${CYAN}映射关系:${NC}"
-            echo "  ${RELAY_SERVER_NAME}: $RELAY_SERVER_IP:$search_port"
-            echo "  ${TARGET_SERVER_NAME}: $TARGET_SERVER_IP:$target_port"
+            echo -e "${CYAN}映射关系:${NC} $RELAY_SERVER_IP:$search_port → $TARGET_SERVER_IP:$target_port"
         else
-            log_warning "未找到转发规则"
+            echo -e "${YELLOW}没有找到转发规则${NC}"
         fi
         
+        # 检查端口占用情况
         echo ""
         echo -e "${CYAN}端口占用情况:${NC}"
         get_port_usage_detail "$search_port"
         
     else
-        # 显示所有转发规则
         echo -e "${BLUE}=== 所有端口转发规则 ===${NC}"
-        
         local total_rules=$(iptables -t nat -L PREROUTING -n 2>/dev/null | grep -c "to:$TARGET_SERVER_IP")
         echo "转发规则总数: $total_rules"
+        echo ""
         
         if [ "$total_rules" -eq 0 ]; then
             log_warning "没有找到任何转发规则"
             return 0
         fi
         
-        echo ""
-        echo -e "${YELLOW}使用示例:${NC}"
-    echo "  $0 add 3389                     转发3389端口（相同端口）"
-    echo "  $0 add 3389 13389               目标3389端口映射到中转13389端口"
-    echo "  $0 auto 3389                    自动为3389端口分配中转端口"
-    echo "  $0 map 22 2222                  SSH端口映射"
-    echo "  $0 modify 13389 3390            修改13389端口的目标端口为3390"
-    echo "  $0 modify 13389 3390 23389      修改目标端口为3390，中转端口为23389"
-    echo "  $0 edit 13389                   交互式修改13389端口的转发规则"
-    echo "  $0 test 13389                   测试13389端口转发"
-    echo "  $0 find-free 40000              从40000开始查找可用端口"
-    echo ""
-    echo -e "${YELLOW}配置文件:${NC}"
-    echo "  编辑脚本顶部的配置区域来设置目标服务器和中转服务器信息"
-}
-
-# 显示当前配置
-show_config() {
-    echo -e "${BLUE}=== 当前配置 ===${NC}"
-    echo ""
-    echo -e "${YELLOW}服务器配置:${NC}"
-    echo "  目标服务器IP: $TARGET_SERVER_IP"
-    echo "  目标服务器名称: $TARGET_SERVER_NAME"
-    echo "  中转服务器IP: $RELAY_SERVER_IP"
-    echo "  中转服务器名称: $RELAY_SERVER_NAME"
-    echo ""
-    echo -e "${YELLOW}系统配置:${NC}"
-    echo "  规则保存路径: $RULES_FILE"
-    echo "  自动端口起始: $AUTO_PORT_START"
-    echo ""
-    echo -e "${YELLOW}修改配置:${NC}"
-    echo "  编辑脚本文件，修改顶部配置区域的变量"
-    echo "  或复制脚本到新文件并修改配置"
-}
-
-# 批量添加端口范围
-add_port_range() {
-    local start_port=$1
-    local end_port=$2
-    
-    if ! validate_port "$start_port" || ! validate_port "$end_port"; then
-        log_error "无效的端口范围: $start_port-$end_port"
-        return 1
-    fi
-    
-    if [ "$start_port" -gt "$end_port" ]; then
-        log_error "起始端口不能大于结束端口"
-        return 1
-    fi
-    
-    local total_ports=$((end_port - start_port + 1))
-    if [ "$total_ports" -gt 1000 ]; then
-        log_warning "端口范围过大($total_ports个端口)，建议分批处理"
-        read -p "是否继续？(y/N): " -r
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log_info "操作已取消"
-            return 1
-        fi
-    fi
-    
-    log_info "批量添加端口范围: $start_port-$end_port ($total_ports个端口)"
-    
-    local success_count=0
-    local fail_count=0
-    
-    for port in $(seq "$start_port" "$end_port"); do
-        if add_port_forward "$port" "$port" false >/dev/null 2>&1; then
-            ((success_count++))
-        else
-            ((fail_count++))
-        fi
-        
-        # 显示进度
-        local current=$((port - start_port + 1))
-        echo -ne "\r${CYAN}进度: $current/$total_ports (成功: $success_count, 失败: $fail_count)${NC}"
-    done
-    
-    echo ""
-    log_success "批量添加完成: 成功 $success_count 个，失败 $fail_count 个"
-    
-    if [ "$fail_count" -gt 0 ]; then
-        log_info "失败的端口可能已被占用或已有转发规则"
-    fi
-}
-
-# 清理和维护功能
-cleanup_rules() {
-    log_info "检查转发规则完整性..."
-    
-    local total_prerouting=0
-    local total_forward=0
-    local orphan_rules=0
-    
-    # 统计PREROUTING规则
-    total_prerouting=$(iptables -t nat -L PREROUTING -n 2>/dev/null | grep -c "to:$TARGET_SERVER_IP")
-    
-    # 统计FORWARD规则（这个比较复杂，简化处理）
-    total_forward=$(iptables -L FORWARD -n 2>/dev/null | grep -c "ACCEPT")
-    
-    log_info "规则统计:"
-    echo "  PREROUTING规则: $total_prerouting"
-    echo "  FORWARD规则: $total_forward"
-    
-    # 检查重复规则
-    log_info "检查重复规则..."
-    local duplicate_count=0
-    
-    # 获取所有转发端口并检查重复
-    local ports=($(iptables -t nat -L PREROUTING -n 2>/dev/null | grep "to:$TARGET_SERVER_IP" | grep -o "dpt:[0-9]*" | cut -d':' -f2 | sort))
-    local prev_port=""
-    
-    for port in "${ports[@]}"; do
-        if [ "$port" = "$prev_port" ]; then
-            ((duplicate_count++))
-            log_warning "发现重复端口: $port"
-        fi
-        prev_port="$port"
-    done
-    
-    if [ "$duplicate_count" -eq 0 ]; then
-        log_success "未发现重复规则"
-    else
-        log_warning "发现 $duplicate_count 个重复规则，建议手动清理"
-    fi
-    
-    log_success "规则检查完成"
-}
-
-#================================================================
-# 主程序入口
-#================================================================
-
-# 主函数
-main() {
-    # 检查运行权限
-    check_root
-    
-    # 检查系统依赖
-    check_dependencies
-    
-    # 检查配置
-    check_config
-    
-    # 验证IP地址格式
-    if ! validate_ip "$TARGET_SERVER_IP"; then
-        log_error "无效的目标服务器IP地址: $TARGET_SERVER_IP"
-        exit 1
-    fi
-    
-    if ! validate_ip "$RELAY_SERVER_IP"; then
-        log_error "无效的中转服务器IP地址: $RELAY_SERVER_IP"
-        exit 1
-    fi
-    
-    # 解析命令行参数
-    case "${1:-help}" in
-        "add")
-            if [ -z "$2" ]; then
-                log_error "请指定目标端口号"
-                show_usage
-                exit 1
-            fi
-            add_port_forward "$2" "$3"
-            ;;
-        "auto")
-            if [ -z "$2" ]; then
-                log_error "请指定目标端口号"
-                show_usage
-                exit 1
-            fi
-            add_port_forward "$2" "" true
-            ;;
-        "modify")
-            if [ -z "$2" ]; then
-                log_error "请指定要修改的中转端口号"
-                echo "用法: $0 modify <中转端口> [新目标端口] [新中转端口]"
-                exit 1
-            fi
-            # 检查是否有--force参数
-            local force="false"
-            if [[ "$*" == *"--force"* ]]; then
-                force="true"
-            fi
-            modify_port_forward "$2" "$3" "$4" "$force"
-            ;;
-        "edit")
-            if [ -z "$2" ]; then
-                log_error "请指定要修改的中转端口号"
-                echo "用法: $0 edit <中转端口>"
-                exit 1
-            fi
-            interactive_modify "$2"
-            ;;
-        "map")
-            if [ -z "$2" ] || [ -z "$3" ]; then
-                log_error "请指定目标端口和中转端口"
-                echo "用法: $0 map <目标端口> <中转端口>"
-                exit 1
-            fi
-            add_port_forward "$2" "$3"
-            ;;
-        "remove")
-            if [ -z "$2" ]; then
-                log_error "请指定要删除的中转端口号"
-                exit 1
-            fi
-            # 检查是否有--force参数（跳过确认）
-            local force_remove="false"
-            if [[ "$*" == *"--force"* ]]; then
-                force_remove="true"
-            fi
-            remove_port_forward "$2" "$([ "$force_remove" = "true" ] && echo "false" || echo "true")"
-            ;;
-        "range")
-            if [ -z "$2" ] || [ -z "$3" ]; then
-                log_error "请指定端口范围"
-                echo "用法: $0 range <起始端口> <结束端口>"
-                exit 1
-            fi
-            add_port_range "$2" "$3"
-            ;;
-        "list")
-            list_port_forwards "$2"
-            ;;
-        "status")
-            show_status
-            ;;
-        "test")
-            if [ -z "$2" ]; then
-                log_error "请指定要测试的中转端口号"
-                exit 1
-            fi
-            test_port_forward "$2"
-            ;;
-        "check")
-            if [ -z "$2" ]; then
-                log_error "请指定要检查的端口号"
-                exit 1
-            fi
-            echo -e "${BLUE}=== 端口 $2 占用情况 ===${NC}"
-            get_port_usage_detail "$2"
-            ;;
-        "find-free")
-            local found_port=$(find_available_port "$2")
-            if [ $? -eq 0 ]; then
-                log_success "找到可用端口: $found_port"
-            fi
-            ;;
-        "save")
-            save_rules
-            ;;
-        "restore")
-            restore_rules
-            ;;
-        "backup")
-            backup_rules
-            ;;
-        "info")
-            show_connection_info
-            ;;
-        "config")
-            show_config
-            ;;
-        "cleanup")
-            cleanup_rules
-            ;;
-        "help"|"--help"|"-h"|"")
-            show_usage
-            ;;
-        *)
-            log_error "未知命令: $1"
-            echo ""
-            show_usage
-            exit 1
-            ;;
-    esac
-}
-
-# 脚本入口点
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi}转发映射列表:${NC}"
+        echo -e "${YELLOW}转发映射列表:${NC}"
         printf "%-6s %-15s %-15s %-10s\n" "序号" "${RELAY_SERVER_NAME}端口" "${TARGET_SERVER_NAME}端口" "状态"
         echo "------------------------------------------------"
         
@@ -1132,8 +848,121 @@ show_connection_info() {
     echo -e "${YELLOW}常用命令:${NC}"
     echo "  添加转发: $0 add <目标端口> [中转端口]"
     echo "  自动分配: $0 auto <目标端口>"
+    echo "  修改规则: $0 modify <中转端口> [新目标端口] [新中转端口]"
     echo "  查看状态: $0 status"
     echo "  测试连接: $0 test <中转端口>"
+}
+
+# 显示当前配置
+show_config() {
+    echo -e "${BLUE}=== 当前配置 ===${NC}"
+    echo ""
+    echo -e "${YELLOW}服务器配置:${NC}"
+    echo "  目标服务器IP: $TARGET_SERVER_IP"
+    echo "  目标服务器名称: $TARGET_SERVER_NAME"
+    echo "  中转服务器IP: $RELAY_SERVER_IP"
+    echo "  中转服务器名称: $RELAY_SERVER_NAME"
+    echo ""
+    echo -e "${YELLOW}系统配置:${NC}"
+    echo "  规则保存路径: $RULES_FILE"
+    echo "  自动端口起始: $AUTO_PORT_START"
+    echo ""
+    echo -e "${YELLOW}修改配置:${NC}"
+    echo "  编辑脚本文件，修改顶部配置区域的变量"
+    echo "  或复制脚本到新文件并修改配置"
+}
+
+# 批量添加端口范围
+add_port_range() {
+    local start_port=$1
+    local end_port=$2
+    
+    if ! validate_port "$start_port" || ! validate_port "$end_port"; then
+        log_error "无效的端口范围: $start_port-$end_port"
+        return 1
+    fi
+    
+    if [ "$start_port" -gt "$end_port" ]; then
+        log_error "起始端口不能大于结束端口"
+        return 1
+    fi
+    
+    local total_ports=$((end_port - start_port + 1))
+    if [ "$total_ports" -gt 1000 ]; then
+        log_warning "端口范围过大($total_ports个端口)，建议分批处理"
+        read -p "是否继续？(y/N): " -r
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "操作已取消"
+            return 1
+        fi
+    fi
+    
+    log_info "批量添加端口范围: $start_port-$end_port ($total_ports个端口)"
+    
+    local success_count=0
+    local fail_count=0
+    
+    for port in $(seq "$start_port" "$end_port"); do
+        if add_port_forward "$port" "$port" false >/dev/null 2>&1; then
+            ((success_count++))
+        else
+            ((fail_count++))
+        fi
+        
+        # 显示进度
+        local current=$((port - start_port + 1))
+        echo -ne "\r${CYAN}进度: $current/$total_ports (成功: $success_count, 失败: $fail_count)${NC}"
+    done
+    
+    echo ""
+    log_success "批量添加完成: 成功 $success_count 个，失败 $fail_count 个"
+    
+    if [ "$fail_count" -gt 0 ]; then
+        log_info "失败的端口可能已被占用或已有转发规则"
+    fi
+}
+
+# 清理和维护功能
+cleanup_rules() {
+    log_info "检查转发规则完整性..."
+    
+    local total_prerouting=0
+    local total_forward=0
+    local orphan_rules=0
+    
+    # 统计PREROUTING规则
+    total_prerouting=$(iptables -t nat -L PREROUTING -n 2>/dev/null | grep -c "to:$TARGET_SERVER_IP")
+    
+    # 统计FORWARD规则（这个比较复杂，简化处理）
+    total_forward=$(iptables -L FORWARD -n 2>/dev/null | grep -c "ACCEPT")
+    
+    log_info "规则统计:"
+    echo "  PREROUTING规则: $total_prerouting"
+    echo "  FORWARD规则: $total_forward"
+    
+    # 检查重复规则
+    log_info "检查重复规则..."
+    local duplicate_count=0
+    
+    # 获取所有转发端口并检查重复
+    local ports=($(iptables -t nat -L PREROUTING -n 2>/dev/null | grep "to:$TARGET_SERVER_IP" | grep -o "dpt:[0-9]*" | cut -d':' -f2 | sort))
+    local prev_port=""
+    
+    for port in "${ports[@]}"; do
+        if [ "$port" = "$prev_port" ]; then
+            ((duplicate_count++))
+            log_warning "发现重复端口: $port"
+        fi
+        prev_port="$port"
+    done
+    
+    if [ "$duplicate_count" -eq 0 ]; then
+        log_success "未发现重复规则"
+    else
+        log_warning "发现 $duplicate_count 个重复规则，建议手动清理"
+    fi
+    
+    log_success "规则检查完成"
 }
 
 #================================================================
@@ -1172,5 +1001,174 @@ show_usage() {
     echo "  backup                          备份当前规则"
     echo "  info                            显示连接信息"
     echo "  config                          显示当前配置"
+    echo "  cleanup                         检查规则完整性"
     echo ""
-    echo -e "${YELLOW
+    echo -e "${YELLOW}使用示例:${NC}"
+    echo "  $0 add 3389                     转发3389端口（相同端口）"
+    echo "  $0 add 3389 13389               目标3389端口映射到中转13389端口"
+    echo "  $0 auto 3389                    自动为3389端口分配中转端口"
+    echo "  $0 map 22 2222                  SSH端口映射"
+    echo "  $0 modify 13389 3390            修改13389端口的目标端口为3390"
+    echo "  $0 modify 13389 3390 23389      修改目标端口为3390，中转端口为23389"
+    echo "  $0 edit 13389                   交互式修改13389端口的转发规则"
+    echo "  $0 test 13389                   测试13389端口转发"
+    echo "  $0 find-free 40000              从40000开始查找可用端口"
+    echo ""
+    echo -e "${YELLOW}配置文件:${NC}"
+    echo "  编辑脚本顶部的配置区域来设置目标服务器和中转服务器信息"
+}
+
+#================================================================
+# 主程序入口
+#================================================================
+
+# 主函数
+main() {
+    # 检查运行权限
+    check_root
+    
+    # 检查系统依赖
+    check_dependencies
+    
+    # 检查配置
+    check_config
+    
+    # 验证IP地址格式
+    if ! validate_ip "$TARGET_SERVER_IP"; then
+        log_error "无效的目标服务器IP地址: $TARGET_SERVER_IP"
+        exit 1
+    fi
+    
+    if ! validate_ip "$RELAY_SERVER_IP"; then
+        log_error "无效的中转服务器IP地址: $RELAY_SERVER_IP"
+        exit 1
+    fi
+    
+    # 解析命令行参数
+    case "${1:-help}" in
+        "add")
+            if [ -z "$2" ]; then
+                log_error "请指定目标端口号"
+                show_usage
+                exit 1
+            fi
+            add_port_forward "$2" "$3"
+            ;;
+        "auto")
+            if [ -z "$2" ]; then
+                log_error "请指定目标端口号"
+                show_usage
+                exit 1
+            fi
+            add_port_forward "$2" "" true
+            ;;
+        "map")
+            if [ -z "$2" ] || [ -z "$3" ]; then
+                log_error "请指定目标端口和中转端口"
+                echo "用法: $0 map <目标端口> <中转端口>"
+                exit 1
+            fi
+            add_port_forward "$2" "$3"
+            ;;
+        "modify")
+            if [ -z "$2" ]; then
+                log_error "请指定要修改的中转端口号"
+                echo "用法: $0 modify <中转端口> [新目标端口] [新中转端口]"
+                exit 1
+            fi
+            # 检查是否有--force参数
+            local force="false"
+            if [[ "$*" == *"--force"* ]]; then
+                force="true"
+            fi
+            modify_port_forward "$2" "$3" "$4" "$force"
+            ;;
+        "edit")
+            if [ -z "$2" ]; then
+                log_error "请指定要修改的中转端口号"
+                echo "用法: $0 edit <中转端口>"
+                exit 1
+            fi
+            interactive_modify "$2"
+            ;;
+        "remove")
+            if [ -z "$2" ]; then
+                log_error "请指定要删除的中转端口号"
+                exit 1
+            fi
+            # 检查是否有--force参数（跳过确认）
+            local force_remove="false"
+            if [[ "$*" == *"--force"* ]]; then
+                force_remove="true"
+            fi
+            remove_port_forward "$2" "$([ "$force_remove" = "true" ] && echo "false" || echo "true")"
+            ;;
+        "range")
+            if [ -z "$2" ] || [ -z "$3" ]; then
+                log_error "请指定端口范围"
+                echo "用法: $0 range <起始端口> <结束端口>"
+                exit 1
+            fi
+            add_port_range "$2" "$3"
+            ;;
+        "list")
+            list_port_forwards "$2"
+            ;;
+        "status")
+            show_status
+            ;;
+        "test")
+            if [ -z "$2" ]; then
+                log_error "请指定要测试的中转端口号"
+                exit 1
+            fi
+            test_port_forward "$2"
+            ;;
+        "check")
+            if [ -z "$2" ]; then
+                log_error "请指定要检查的端口号"
+                exit 1
+            fi
+            echo -e "${BLUE}=== 端口 $2 占用情况 ===${NC}"
+            get_port_usage_detail "$2"
+            ;;
+        "find-free")
+            local found_port=$(find_available_port "$2")
+            if [ $? -eq 0 ]; then
+                log_success "找到可用端口: $found_port"
+            fi
+            ;;
+        "save")
+            save_rules
+            ;;
+        "restore")
+            restore_rules
+            ;;
+        "backup")
+            backup_rules
+            ;;
+        "info")
+            show_connection_info
+            ;;
+        "config")
+            show_config
+            ;;
+        "cleanup")
+            cleanup_rules
+            ;;
+        "help"|"--help"|"-h"|"")
+            show_usage
+            ;;
+        *)
+            log_error "未知命令: $1"
+            echo ""
+            show_usage
+            exit 1
+            ;;
+    esac
+}
+
+# 脚本入口点
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
